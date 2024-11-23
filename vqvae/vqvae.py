@@ -8,25 +8,25 @@ from .decoder import Decoder
 from .encoder import Encoder
 
 class VQVAE_Encoder(nn.Module):
-    def __init__(self, in_dim, h_dim, res_h_dim, n_res_layers, n_embeddings, embedding_dim, beta):
+    def __init__(self, in_dim, h_dim, res_h_dim, n_res_layers, n_embeddings, D_embed, beta):
         """
         VQVAE Encoder
         - h_dim: Hidden dimension of encoder
         - res_h_dim: Residual block dimension
         - n_res_layers: Number of residual layers
         - n_embeddings: Number of embeddings in vector quantizer
-        - embedding_dim: Dimension of each embedding (D_embed)
+        - D_embed: Dimension of each embedding (embedding_dim)
         - beta: Commitment loss weight
         """
         super(VQVAE_Encoder, self).__init__()
-        self.encoder = Encoder(in_dim, h_dim, n_res_layers, res_h_dim, embedding_dim)
+        self.encoder = Encoder(in_dim, h_dim, n_res_layers, res_h_dim, D_embed)
         self.pre_quantization_conv = nn.Conv1d(
-            in_channels=embedding_dim, 
-            out_channels=embedding_dim, 
+            in_channels=D_embed, 
+            out_channels=D_embed, 
             kernel_size=1, 
             stride=1
         )
-        self.vector_quantization = VectorQuantizer(n_embeddings, embedding_dim, beta)
+        self.vector_quantization = VectorQuantizer(n_embeddings, D_embed, beta)
 
     def forward(self, x):
         """
@@ -48,9 +48,9 @@ class VQVAE_Encoder(nn.Module):
 
 
 class VQVAE_Decoder(nn.Module):
-    def __init__(self, embedding_dim, h_dim, n_res_layers, res_h_dim):
+    def __init__(self, D_embed, h_dim, n_res_layers, res_h_dim):
         super(VQVAE_Decoder, self).__init__()
-        self.decoder = Decoder(embedding_dim, h_dim, n_res_layers, res_h_dim)
+        self.decoder = Decoder(D_embed, h_dim, n_res_layers, res_h_dim)
 
     def forward(self, z_q, W, H):
         # Reshape to (B, D_embed, W', H') for decoding

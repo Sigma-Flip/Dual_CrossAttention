@@ -10,14 +10,14 @@ class Encoder(nn.Module):
     - Output shape: (B, N_seq_img, D_embed), where N_seq_img = Flattened (W', H')
     """
 
-    def __init__(self, in_dim, h_dim, n_res_layers, res_h_dim, embed_dim):
+    def __init__(self, in_dim, h_dim, n_res_layers, res_h_dim, D_embed):
         """
         Args:
         - in_dim: Input channels (e.g., 3 for RGB images)
         - h_dim: Hidden dimension after Conv layers
         - n_res_layers: Number of residual layers
         - res_h_dim: Residual block hidden dimension
-        - embed_dim: Final embedding dimension (D_embed)
+        - D_embed: Final embedding dimension (D_embed)
         """
         super(Encoder, self).__init__()
         self.conv_stack = nn.Sequential(
@@ -26,7 +26,7 @@ class Encoder(nn.Module):
             nn.Conv2d(h_dim // 2, h_dim, kernel_size=4, stride=2, padding=1),
             nn.ReLU(inplace=False),
             ResidualStack(h_dim, h_dim, res_h_dim, n_res_layers),
-            nn.Conv2d(h_dim, embed_dim, kernel_size=3, stride=1, padding=1)  # Final embedding dimension
+            nn.Conv2d(h_dim, D_embed, kernel_size=3, stride=1, padding=1)  # Final embedding dimension
         )
 
     def forward(self, x):
@@ -45,7 +45,7 @@ if __name__ == "__main__":
     x = torch.randn(B, C, W, H)
 
     # Initialize encoder
-    encoder = Encoder(in_dim=3, h_dim=128, n_res_layers=3, res_h_dim=64, embed_dim=64)
+    encoder = Encoder(in_dim=3, h_dim=128, n_res_layers=3, res_h_dim=64, D_embed=64)
 
     # Forward pass
     encoder_out = encoder(x)

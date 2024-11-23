@@ -1,1 +1,12 @@
-data/
+# Ignore all files and folders
+*
+
+# Allow specific folders and files to be tracked by Git
+!transformer/
+!vqvae/
+!train.py
+!train_vqvae.py
+!modules.py
+
+# Optionally, ignore all hidden files (e.g., .DS_Store, .vscode, etc.)
+.*

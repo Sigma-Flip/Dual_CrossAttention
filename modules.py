@@ -9,25 +9,37 @@ from transformers import AutoTokenizer
 
 
 class ImgEncoder(nn.Module):
-    def __init__(self, D_embed, H, W, # Positional Encoding params
-                h_dim, res_h_dim, n_res_layers, n_embeddings, embedding_dim, beta, # VQVAE params
-                 N_stacks, N_heads): # Attention Stack params
+    def __init__(self, H, W,  # 위치 인코딩 파라미터
+                 h_dim, res_h_dim, n_res_layers, n_embeddings, D_embed, beta,  # VQVAE 파라미터
+                 N_stacks, N_heads, device='cpu'):  # 어텐션 스택 파라미터
         super(ImgEncoder, self).__init__()
-        self.channel_projection = nn.Conv2d(in_channels=3, out_channels=D_embed, kernel_size=1)  # (B, C, H, W) -> (B, D_embed, H, W)
-        self.positionalEncoding2d = PositionalEncoding2D(D_embed=D_embed, height=H, width=W)  # (B, D_embed, H, W)
-        self.vqvaeEncoder = VQVAE_Encoder(D_embed, h_dim, res_h_dim, n_res_layers, n_embeddings, embedding_dim, beta)  # (B, N_seq_img, D_embed)
-        self.selfAttention = AttentionStack(N_stacks, D_embed, N_heads)  # (B, N_seq_img, D_embed) -> (B, N_seq_img, D_embed)
-    
+        self.device = device
+
+        # VQVAE 인코더의 기대에 맞춰 입력 채널 수를 3에서 h_dim으로 변환합니다.
+        self.positionalEncoding2d = PositionalEncoding2D(height=H, width=W, device=device)  # 위치 인코딩
+
+        # VQVAE 인코더 정의 (입력 채널 수는 3)
+        self.vqvaeEncoder = VQVAE_Encoder(3, h_dim, res_h_dim, n_res_layers, n_embeddings, D_embed, beta).to(device)  # (B, h_dim, H, W)
+
+        # 이미지 표현을 위한 어텐션 스택
+        self.selfAttention = AttentionStack(N_stacks, D_embed, N_heads, device=device)  # (B, N_seq_img, embedding_dim) -> (B, N_seq_img, embedding_dim)
+
     def forward(self, img):
-        # Project input channels to match D_embed
-        img_projected = self.channel_projection(img)  # Shape: (B, D_embed, H, W)
-        positioned_img = self.positionalEncoding2d(img_projected)  # Shape: (B, D_embed, H, W)
-        embedding_loss, z_q, perplexity, z_e, encodings, encoding_indices = self.vqvaeEncoder(positioned_img)  # z_q: (B, N_seq_img, D_embed)
-        attention_value = self.selfAttention(z_q)  # attention_value : (B, N_seq_img, D_embed)
+        img = img.to(self.device)
+        # 위치 인코딩 - 채널 프로젝션 이후 적용하여 입력 차원 유지
+        positioned_img = self.positionalEncoding2d(img)  # Shape: (B, 3, H, W)
+
+        # VQVAE 인코더에 통과시킵니다.
+        embedding_loss, z_q, perplexity, z_e, encodings, encoding_indices = self.vqvaeEncoder(positioned_img)  # (B, N_seq_img, embedding_dim)
+
+        # VQVAE 인코더 이후 어텐션 스택 적용
+        attention_value = self.selfAttention(z_q)  # attention_value: (B, N_seq_img, embedding_dim)
+
         return attention_value, embedding_loss, perplexity, z_e, encodings, encoding_indices
+
     
 class TxtEncoder(nn.Module):
-    def __init__(self, pretrained_model_name: str, N_stacks: int, D_embed: int, N_heads: int):
+    def __init__(self, pretrained_model_name: str, N_stacks: int, D_embed: int, N_heads: int, device='cpu'):
         """
         TxtEncoder: Encodes text sequences using self-attention.
         Args:
@@ -37,10 +49,11 @@ class TxtEncoder(nn.Module):
         - N_heads: Number of attention heads
         """
         super(TxtEncoder, self).__init__()
+        self.device = device
         self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name)  # Pre-trained tokenizer
-        self.embedding = nn.Embedding(self.tokenizer.vocab_size, D_embed)  # Embedding layer to convert input_ids to D_embed
-        self.positionalEncoding1d = PositionalEncoding(D_embed)  # 1D Positional Encoding
-        self.selfAttention = AttentionStack(N_stacks, D_embed, N_heads)  # Attention Stack
+        self.embedding = nn.Embedding(self.tokenizer.vocab_size, D_embed).to(device)  # Embedding layer to convert input_ids to D_embed
+        self.positionalEncoding1d = PositionalEncoding(D_embed, device=device)  # 1D Positional Encoding
+        self.selfAttention = AttentionStack(N_stacks, D_embed, N_heads, device=device)  # Attention Stack
 
     def forward(self, txt):
         """
@@ -51,8 +64,8 @@ class TxtEncoder(nn.Module):
         - attention_value: Output of self-attention stack
         """
         # Tokenize text and convert to embeddings
-        tokenized = self.tokenizer(txt, return_tensors="pt", padding=True, truncation=True)  # input_ids: (B, N_seq)
-        input_ids = tokenized["input_ids"]  # Shape: (B, N_seq)
+        tokenized = self.tokenizer(txt, return_tensors="pt", padding=True, truncation=True).to(self.device)  # input_ids: (B, N_seq)
+        input_ids = tokenized["input_ids"].to(self.device)  # Shape: (B, N_seq)
 
         # Convert token IDs to embeddings using nn.Embedding
         embeddings = self.embedding(input_ids)  # Shape: (B, N_seq, D_embed)
@@ -64,9 +77,10 @@ class TxtEncoder(nn.Module):
 
 class CrossEncoder(nn.Module):
     def __init__(self, 
-                D_embed, N_heads, dropout=0.1):
+                D_embed, N_heads, dropout=0.1, device='cpu'):
         super(CrossEncoder, self).__init__()
-        self.crossEncoder = CrossAttentionStack(D_embed, N_heads, dropout=0.1)  # Cross-attention block
+        self.device = device
+        self.crossEncoder = CrossAttentionStack(D_embed, N_heads, dropout=dropout, device=device)  # Cross-attention block
         
     def forward(self, decoder_input, encoder_output):
         '''
@@ -75,16 +89,20 @@ class CrossEncoder(nn.Module):
         Returns:
         - out: (B, N_seq_decoder, D_embed)
         '''
+        decoder_input = decoder_input.to(self.device)
+        encoder_output = encoder_output.to(self.device)
         out = self.crossEncoder(decoder_input, encoder_output) # out: (B, N_seq_decoder, D_embed)
         return out 
     
 class ImgDecoder(nn.Module):
     def __init__(self,
-                 embedding_dim, h_dim, n_res_layers, res_h_dim):
+                 D_embed, h_dim, n_res_layers, res_h_dim, device='cpu'):
         super(ImgDecoder, self).__init__()
-        self.imgDecoder = VQVAE_Decoder(embedding_dim, h_dim, n_res_layers, res_h_dim)  # (B, N_seq_img, D_embed)
+        self.device = device
+        self.imgDecoder = VQVAE_Decoder(D_embed, h_dim, n_res_layers, res_h_dim).to(device)  # (B, N_seq_img, D_embed)
     
     def forward(self, z_q):
+        z_q = z_q.to(self.device)
         # Reshape sequence to 2D grid for decoding
         N_seq_img = z_q.shape[1]
         W_flat = int(N_seq_img**0.5)  # Assume square spatial dimension
@@ -94,9 +112,10 @@ class ImgDecoder(nn.Module):
     
 class TxtDecoder(nn.Module):
     def __init__(self,
-                 N_vocab: int, D_embed: int, N_heads: int, n_layers: int):
+                 N_vocab: int, D_embed: int, N_heads: int, n_layers: int, device='cpu'):
         super(TxtDecoder, self).__init__()
-        self.txtDecoder = DecoderHead(N_vocab, D_embed, N_heads, n_layers)  # (B, N_seq, D_embed) -> (B, N_seq, N_vocab)
+        self.device = device
+        self.txtDecoder = DecoderHead(N_vocab, D_embed, N_heads, n_layers).to(device)  # (B, N_seq, D_embed) -> (B, N_seq, N_vocab)
     
     def forward(self, x):
         """
@@ -106,9 +125,9 @@ class TxtDecoder(nn.Module):
         Returns:
         - output: Tensor of shape (B, N_seq, N_vocab)
         """
+        x = x.to(self.device)
         return self.txtDecoder(x)
 
-# Main script
 # Main script
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"  
@@ -126,16 +145,16 @@ if __name__ == "__main__":
     # Initialize models and move them to the selected device
     img_encoder = ImgEncoder(D_embed=D_embed, H=W, W=H, h_dim=h_dim, res_h_dim=res_h_dim,
                              n_res_layers=n_res_layers, n_embeddings=n_embeddings,
-                             embedding_dim=D_embed, beta=beta, N_stacks=N_stacks, N_heads=N_heads).to(device)
+                             embedding_dim=D_embed, beta=beta, N_stacks=N_stacks, N_heads=N_heads, device=device).to(device)
     
     txt_encoder = TxtEncoder(pretrained_model_name="bert-base-uncased",
-                             N_stacks=N_stacks, D_embed=D_embed, N_heads=N_heads).to(device)
+                             N_stacks=N_stacks, D_embed=D_embed, N_heads=N_heads, device=device).to(device)
     
-    cross_encoder = CrossEncoder(D_embed=D_embed, N_heads=N_heads).to(device)
+    cross_encoder = CrossEncoder(D_embed=D_embed, N_heads=N_heads, device=device).to(device)
     
-    img_decoder = ImgDecoder(embedding_dim=D_embed, h_dim=h_dim, n_res_layers=n_res_layers, res_h_dim=res_h_dim).to(device)
+    img_decoder = ImgDecoder(embedding_dim=D_embed, h_dim=h_dim, n_res_layers=n_res_layers, res_h_dim=res_h_dim, device=device).to(device)
     
-    txt_decoder = TxtDecoder(N_vocab=N_vocab, D_embed=D_embed, N_heads=N_heads, n_layers=n_layers).to(device)
+    txt_decoder = TxtDecoder(N_vocab=N_vocab, D_embed=D_embed, N_heads=N_heads, n_layers=n_layers, device=device).to(device)
 
     # Forward pass for image
     img_attention_value, img_embedding_loss, img_perplexity, z_e, _, _ = img_encoder(img_data)  # img data : (B,C,W,H)

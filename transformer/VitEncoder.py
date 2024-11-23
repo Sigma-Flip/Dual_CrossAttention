@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import logging
 from torchvision.models import vit_b_16, ViT_B_16_Weights
-from attention import AttentionBlock, AttentionStack  # 기존 모듈
+from .attention import AttentionBlock, AttentionStack  # 기존 모듈
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")

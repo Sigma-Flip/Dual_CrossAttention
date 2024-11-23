@@ -8,13 +8,14 @@ from vqvae.vqvae import VQVAE_Encoder, VQVAE_Decoder
 import matplotlib.pyplot as plt
 import os
 from tqdm import tqdm  # Progress bar
+import numpy as np
 
 # Parameters
 BATCH_SIZE = 64
 LEARNING_RATE = 1e-4
-EPOCHS = 2
+EPOCHS = 400
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-CHECKPOINT_DIR = "./checkpoints"
+CHECKPOINT_DIR = "./results"
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
 if __name__ == "__main__":  # Main block for multiprocessing compatibility
@@ -50,100 +51,132 @@ if __name__ == "__main__":  # Main block for multiprocessing compatibility
     embedding_loss_curve = []
     reconstruction_loss_curve = []
     perplexity_curve = []
+    patience_counter = 0
+    
 
-    for epoch in range(1, EPOCHS + 1):
-        encoder.train()
-        decoder.train()
+import numpy as np
 
-        epoch_loss = 0.0
-        epoch_embedding_loss = 0.0
-        epoch_reconstruction_loss = 0.0
-        epoch_perplexity = 0.0
+# Updated Training Loop
+best_losses = [float("inf")] * 5  # Top 5 losses
+best_models = [None] * 5  # Top 5 model checkpoints
 
-        # Using tqdm to show progress bar for batch iteration
-        with tqdm(train_loader, unit="batch") as tepoch:
-            tepoch.set_description(f"Epoch [{epoch}/{EPOCHS}]")
+for epoch in range(1, EPOCHS + 1):
+    encoder.train()
+    decoder.train()
 
-            for batch_idx, (data, _) in enumerate(tepoch):
-                data = data.to(DEVICE)  # Shape: (B, C, W, H)
+    epoch_loss = 0.0
+    epoch_embedding_loss = 0.0
+    epoch_reconstruction_loss = 0.0
+    epoch_perplexity = 0.0
 
-                # Forward pass through Encoder and Decoder
-                embedding_loss, z_q, perplexity, z_e, _, _ = encoder(data)
-                N_seq_img = z_q.shape[1]
-                W_flat = int(N_seq_img ** 0.5)
-                H_flat = W_flat
-                reconstructed_data = decoder(z_q, W_flat, H_flat)
+    # Training loop with progress bar
+    with tqdm(train_loader, unit="batch") as tepoch:
+        tepoch.set_description(f"Epoch [{epoch}/{EPOCHS}]")
 
-                # Compute losses
-                reconstruction_loss = F.mse_loss(reconstructed_data, data)
-                total_loss = reconstruction_loss + embedding_loss
+        for batch_idx, (data, _) in enumerate(tepoch):
+            data = data.to(DEVICE)  # Shape: (B, C, W, H)
 
-                # Backpropagation and optimization
-                optimizer.zero_grad()
-                total_loss.backward()  # Compute gradients
-                optimizer.step()  # Update parameters
+            # Forward pass through Encoder and Decoder
+            embedding_loss, z_q, perplexity, z_e, _, _ = encoder(data)
+            N_seq_img = z_q.shape[1]
+            W_flat = int(N_seq_img ** 0.5)
+            H_flat = W_flat
+            reconstructed_data = decoder(z_q, W_flat, H_flat)
 
-                # Metrics collection
-                epoch_loss += total_loss.item()
-                epoch_embedding_loss += embedding_loss.item()
-                epoch_reconstruction_loss += reconstruction_loss.item()
-                epoch_perplexity += perplexity.item()
+            # Compute losses
+            reconstruction_loss = F.mse_loss(reconstructed_data, data)
+            total_loss = reconstruction_loss + embedding_loss
 
-                # Update tqdm progress bar with loss values
-                tepoch.set_postfix({
-                    "Total Loss": total_loss.item(),
-                    "Reconstruction Loss": reconstruction_loss.item(),
-                    "Embedding Loss": embedding_loss.item(),
-                    "Perplexity": perplexity.item()
-                })
+            # Backpropagation and optimization
+            optimizer.zero_grad()
+            total_loss.backward()
+            optimizer.step()
 
-        # Average loss for the epoch
-        avg_loss = epoch_loss / len(train_loader)
-        avg_embedding_loss = epoch_embedding_loss / len(train_loader)
-        avg_reconstruction_loss = epoch_reconstruction_loss / len(train_loader)
-        avg_perplexity = epoch_perplexity / len(train_loader)
+            # Metrics collection
+            epoch_loss += total_loss.item()
+            epoch_embedding_loss += embedding_loss.item()
+            epoch_reconstruction_loss += reconstruction_loss.item()
+            epoch_perplexity += perplexity.item()
 
-        loss_curve.append(avg_loss)
-        embedding_loss_curve.append(avg_embedding_loss)
-        reconstruction_loss_curve.append(avg_reconstruction_loss)
-        perplexity_curve.append(avg_perplexity)
+            # Update progress bar
+            tepoch.set_postfix({
+                "Total Loss": total_loss.item(),
+                "Reconstruction Loss": reconstruction_loss.item(),
+                "Embedding Loss": embedding_loss.item(),
+                "Perplexity": perplexity.item()
+            })
 
-        print(f"Epoch [{epoch}/{EPOCHS}], Loss: {avg_loss:.4f}, "
-              f"Reconstruction Loss: {avg_reconstruction_loss:.4f}, "
-              f"Embedding Loss: {avg_embedding_loss:.4f}, "
-              f"Perplexity: {avg_perplexity:.4f}")
+    # Calculate average metrics for the epoch
+    avg_loss = epoch_loss / len(train_loader)
+    avg_embedding_loss = epoch_embedding_loss / len(train_loader)
+    avg_reconstruction_loss = epoch_reconstruction_loss / len(train_loader)
+    avg_perplexity = epoch_perplexity / len(train_loader)
 
-        # Save the best model
-        if avg_loss < best_loss:
-            best_loss = avg_loss
-            torch.save({
-                "encoder_state_dict": encoder.state_dict(),
-                "decoder_state_dict": decoder.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "epoch": epoch,
-                "loss": best_loss,
-            }, os.path.join(CHECKPOINT_DIR, "best_model.pth"))
+    # Save metrics to curves
+    loss_curve.append(avg_loss)
+    embedding_loss_curve.append(avg_embedding_loss)
+    reconstruction_loss_curve.append(avg_reconstruction_loss)
+    perplexity_curve.append(avg_perplexity)
 
-    # Plot Loss Curves
-    plt.figure(figsize=(12, 8))
-    plt.plot(range(1, EPOCHS + 1), loss_curve, label="Total Loss")
-    plt.plot(range(1, EPOCHS + 1), embedding_loss_curve, label="Embedding Loss")
-    plt.plot(range(1, EPOCHS + 1), reconstruction_loss_curve, label="Reconstruction Loss")
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss")
-    plt.title("Loss Curves")
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(os.path.join(CHECKPOINT_DIR, "loss_curves.png"))
-    plt.show()
+    print(f"Epoch [{epoch}/{EPOCHS}], Loss: {avg_loss:.4f}, "
+          f"Reconstruction Loss: {avg_reconstruction_loss:.4f}, "
+          f"Embedding Loss: {avg_embedding_loss:.4f}, "
+          f"Perplexity: {avg_perplexity:.4f}")
 
-    # Plot Perplexity Curve
-    plt.figure(figsize=(12, 8))
-    plt.plot(range(1, EPOCHS + 1), perplexity_curve, label="Perplexity")
-    plt.xlabel("Epoch")
-    plt.ylabel("Perplexity")
-    plt.title("Perplexity Curve")
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(os.path.join(CHECKPOINT_DIR, "perplexity_curve.png"))
-    plt.show()
+    # Save the epoch model
+    torch.save({
+        "encoder_state_dict": encoder.state_dict(),
+        "decoder_state_dict": decoder.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "epoch": epoch,
+        "loss": avg_loss,
+    }, os.path.join(CHECKPOINT_DIR, f"epoch_{epoch}_model.pth"))
+
+    # Check and update best losses
+    if avg_loss < max(best_losses):
+        idx = best_losses.index(max(best_losses))
+        best_losses[idx] = avg_loss
+        best_models[idx] = {
+            "encoder_state_dict": encoder.state_dict(),
+            "decoder_state_dict": decoder.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "epoch": epoch,
+            "loss": avg_loss,
+        }
+
+    # Save test reconstructions every 10 epochs
+    if epoch:
+        encoder.eval()
+        decoder.eval()
+        test_data = next(iter(train_loader))[0][:30].to(DEVICE)  # Select first 30 images from train loader
+        _, z_q, _, _, _, _ = encoder(test_data)
+        N_seq_img = z_q.shape[1]
+        W_flat, H_flat = int(N_seq_img**0.5), int(N_seq_img**0.5)
+        reconstructed_test_data = decoder(z_q, W_flat, H_flat).cpu().detach()
+
+        fig, axs = plt.subplots(2, 15, figsize=(15, 2))
+        for i in range(15):
+            axs[0, i].imshow(test_data[i].permute(1, 2, 0).cpu().numpy() * 0.5 + 0.5)
+            axs[1, i].imshow(reconstructed_test_data[i].permute(1, 2, 0).cpu().numpy() * 0.5 + 0.5)
+            axs[0, i].axis('off')
+            axs[1, i].axis('off')
+        plt.suptitle(f"Reconstruction Examples - Epoch {epoch}")
+        plt.savefig(os.path.join(CHECKPOINT_DIR, f"reconstruction_epoch_{epoch}.png"))
+        plt.close()
+
+# Save the top 5 models
+for i, model in enumerate(best_models):
+    torch.save(model, os.path.join(CHECKPOINT_DIR, f"best_model_{i+1}.pth"))
+
+# Plot Loss Curves
+plt.figure(figsize=(12, 8))
+plt.plot(range(1, len(loss_curve) + 1), loss_curve, label="Total Loss")
+plt.plot(range(1, len(embedding_loss_curve) + 1), embedding_loss_curve, label="Embedding Loss")
+plt.plot(range(1, len(reconstruction_loss_curve) + 1), reconstruction_loss_curve, label="Reconstruction Loss")
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.title("Loss Curves")
+plt.legend()
+plt.grid(True)
+plt.savefig(os.path.join(CHECKPOINT_DIR, "loss_curves_combined.png"))
+plt.show()
